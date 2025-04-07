@@ -1,0 +1,29 @@
+Edit
+Reload
+Preview
+
+
+
+version: 1
+auto-generated: true
+indices:
+  default:
+    include:
+      - /**
+    target: /query-index.json
+    properties:
+      lastModified:
+        select: none
+        value: parseTimestamp(headers["last-modified"], "ddd, DD MMM YYYY hh:mm:ss GMT")
+      title:
+        select: head > meta[property="og:title"]
+        value: attribute(el, "content")
+      image:
+        select: head > meta[property="og:image"]
+        value: match(attribute(el, "content"), "https:\/\/[^/]+(/.*)")
+      descrption:
+        select: head > meta[name="descrption"]
+        value: attribute(el, "content")
+      lastmodified:
+        select: head > meta[name="lastmodified"]
+        value: attribute(el, "content")

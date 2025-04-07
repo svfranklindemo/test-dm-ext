@@ -1,19 +1,8 @@
-/*
-Copyright 2023 Adobe. All rights reserved.
-This file is licensed to you under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License. You may obtain a copy
-of the License at http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software distributed under
-the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR REPRESENTATIONS
-OF ANY KIND, either express or implied. See the License for the specific language
-governing permissions and limitations under the License.
-*/
-
 import {
   sampleRUM,
   buildBlock,
-  createOptimizedPicture as libCreateOptimizedPicture,
+  loadHeader,
+  loadFooter,
   decorateButtons,
   decorateIcons,
   decorateSections,
@@ -22,9 +11,10 @@ import {
   waitForLCP,
   loadBlocks,
   loadCSS,
-} from './lib-franklin.js';
+} from './aem.js';
 
 const LCP_BLOCKS = []; // add your LCP blocks to the list
+let externalAssetHost = "delivery-p129624-e1269699";
 
 /**
  * Builds hero block and prepends to main in a new section.
@@ -39,6 +29,33 @@ function buildHeroBlock(main) {
     section.append(buildBlock('hero', { elems: [picture, h1] }));
     main.prepend(section);
   }
+}
+
+/**
+ * Gets the cleaned up URL removing barriers to get picture src.
+ * @param {string} url The URL
+ * @returns {string} The normalised url
+ * @private
+ * @example
+ * get_url_extension('https://delivery-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/original/as/strawberry.jpg?preferwebp=true');
+ * // returns 'https://delivery-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?preferwebp=true'
+ * get_url_extension('https://delivery-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?accept-experimental=1&preferwebp=true');
+ * // returns 'https://delivery-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?preferwebp=true'
+ * get_url_extension('https://delivery-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?width=2048&height=2048&preferwebp=true');
+ * // returns 'https://delivery-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?preferwebp=true'
+ * get_url_extension('https://author-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?accept-experimental=1&width=2048&height=2048&preferwebp=true');
+ * // returns 'https://author-p129624-e1269699.adobeaemcloud.com/adobe/assets/urn:aaid:aem:a...492d81/as/strawberry.jpg?accept-experimental=1&width=2048&height=2048&preferwebp=true'
+ */
+export function createOptimizedSrc(src) {
+  const isDMOpenAPIUrl = /^(https?:\/\/delivery-p[0-9]+-e[0-9-cmstg]+\.adobeaemcloud\.com\/(.*))/gm.test(src);
+  const srcUrl = new URL(src);
+  if (isDMOpenAPIUrl) {
+    srcUrl.searchParams.delete('accept-experimental');
+    srcUrl.searchParams.delete('width');
+    srcUrl.searchParams.delete('height');
+    srcUrl.pathname = srcUrl.pathname.replace('/original/', '/');
+  }
+  return srcUrl.toString();
 }
 
 /**
@@ -67,6 +84,72 @@ function buildAutoBlocks(main) {
 }
 
 /**
+ * Decorates the main element.
+ * @param {Element} main The main element
+ */
+// eslint-disable-next-line import/prefer-default-export
+export function decorateMain(main) {
+  // decorate external images with explicit external image marker
+  decorateExternalImages(main, '//External Image//');
+
+  // decorate external images with implicit external image marker
+  decorateExternalImages(main);
+  
+  // hopefully forward compatible button decoration
+  decorateButtons(main);
+  decorateIcons(main);
+  buildAutoBlocks(main);
+  decorateSections(main);
+  decorateBlocks(main);
+}
+
+function decorateExternalImages(ele, deliveryMarker) {
+  const extImages = ele.querySelectorAll('a');
+  extImages.forEach((extImage) => {
+    if (isExternalImage(extImage, deliveryMarker)) {
+      const extImageSrc = createOptimizedSrc(extImage.getAttribute('href'));
+      const extPicture = createOptimizedPicture(extImageSrc);
+
+      /* copy query params from link to img */
+      const extImageUrl = new URL(extImageSrc);
+      const { searchParams } = extImageUrl;
+      extPicture.querySelectorAll('source, img').forEach((child) => {
+        if (child.tagName === 'SOURCE') {
+          const srcset = child.getAttribute('srcset');
+          if (srcset) {
+              const queryParams = appendQueryParams(new URL(srcset, extImageSrc), searchParams);
+              child.setAttribute('srcset', queryParams);  
+          }
+        } else if (child.tagName === 'IMG') {
+          const src = child.getAttribute('src');
+          if (src) {
+            const queryParams = appendQueryParams(new URL(src, extImageSrc), searchParams);
+            child.setAttribute('src', queryParams);
+          }
+        }
+      });
+      extImage.parentNode.replaceChild(extPicture, extImage);
+    }
+  });
+}
+
+function isExternalImage(element, externalImageMarker) {
+  // if the element is not an anchor, it's not an external image
+  if (element.tagName !== 'A') return false;
+
+  // if the element is an anchor with the external image marker as text content,
+  // it's an external image
+  if (element.textContent.trim() === externalImageMarker) {
+    return true;
+  }
+
+  // if the element is an anchor with the href as text content and the href has
+  // an image extension, it's an external image
+  const ext = getUrlExtension(element.getAttribute('href'));
+  return (ext && ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext.toLowerCase()));
+}
+
+/**
  * Gets the extension of a URL.
  * @param {string} url The URL
  * @returns {string} The extension
@@ -83,33 +166,6 @@ function buildAutoBlocks(main) {
  */
 function getUrlExtension(url) {
   return url.split(/[#?]/)[0].split('.').pop().trim();
-}
-
-/**
- * Checks if an element is an external image.
- * @param {Element} element The element
- * @param {string} externalImageMarker The marker for external images
- * @returns {boolean} Whether the element is an external image
- * @private
- */
-function isExternalImage(element, externalImageMarker) {
-  // if the element is not an anchor, it's not an external image
-  if (element.tagName !== 'A') return false;
-
-  // if the element is an anchor with the external image marker as text content,
-  // it's an external image
-  if (element.textContent.trim() === externalImageMarker) {
-    return true;
-  }
-
-  // if the element is an anchor with the href as text content and the href has
-  // an image extension, it's an external image
-  if (element.textContent.trim() === element.getAttribute('href')) {
-    const ext = getUrlExtension(element.getAttribute('href'));
-    return ext && ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext.toLowerCase());
-  }
-
-  return false;
 }
 
 /*
@@ -131,16 +187,6 @@ function appendQueryParams(url, params) {
   return url.toString();
 }
 
-/**
- * Creates an optimized picture element for an image.
- * If the image is not an absolute URL, it will be passed to libCreateOptimizedPicture.
- * @param {string} src The image source URL
- * @param {string} alt The image alt text
- * @param {boolean} eager Whether to load the image eagerly
- * @param {object[]} breakpoints The breakpoints to use
- * @returns {Element} The picture element
- *
- */
 export function createOptimizedPicture(src, alt = '', eager = false, breakpoints = [{ media: '(min-width: 600px)', width: '2000' }, { width: '750' }]) {
   const isAbsoluteUrl = /^https?:\/\//i.test(src);
 
@@ -151,7 +197,7 @@ export function createOptimizedPicture(src, alt = '', eager = false, breakpoints
   const picture = document.createElement('picture');
   const { pathname } = url;
   const ext = pathname.substring(pathname.lastIndexOf('.') + 1);
-
+  
   // webp
   breakpoints.forEach((br) => {
     const source = document.createElement('source');
@@ -181,62 +227,6 @@ export function createOptimizedPicture(src, alt = '', eager = false, breakpoints
   });
 
   return picture;
-}
-
-/*
-  * Decorates external images with a picture element
-  * @param {Element} ele The element
-  * @param {string} deliveryMarker The marker for external images
-  * @private
-  * @example
-  * decorateExternalImages(main, '//External Image//');
-  */
-function decorateExternalImages(ele, deliveryMarker) {
-  const extImages = ele.querySelectorAll('a');
-  extImages.forEach((extImage) => {
-    if (isExternalImage(extImage, deliveryMarker)) {
-      const extImageSrc = extImage.getAttribute('href');
-      const extPicture = createOptimizedPicture(extImageSrc);
-
-      /* copy query params from link to img */
-      const extImageUrl = new URL(extImageSrc);
-      const { searchParams } = extImageUrl;
-      extPicture.querySelectorAll('source, img').forEach((child) => {
-        if (child.tagName === 'SOURCE') {
-          const srcset = child.getAttribute('srcset');
-          if (srcset) {
-            child.setAttribute('srcset', appendQueryParams(new URL(srcset, extImageSrc), searchParams));
-          }
-        } else if (child.tagName === 'IMG') {
-          const src = child.getAttribute('src');
-          if (src) {
-            child.setAttribute('src', appendQueryParams(new URL(src, extImageSrc), searchParams));
-          }
-        }
-      });
-      extImage.parentNode.replaceChild(extPicture, extImage);
-    }
-  });
-}
-
-/**
- * Decorates the main element.
- * @param {Element} main The main element
- */
-// eslint-disable-next-line import/prefer-default-export
-export function decorateMain(main) {
-  // decorate external images with explicit external image marker
-  decorateExternalImages(main, '//External Image//');
-
-  // decorate external images with implicit external image marker
-  decorateExternalImages(main);
-
-  // hopefully forward compatible button decoration
-  decorateButtons(main);
-  decorateIcons(main);
-  buildAutoBlocks(main);
-  decorateSections(main);
-  decorateBlocks(main);
 }
 
 /**
@@ -274,6 +264,9 @@ async function loadLazy(doc) {
   const { hash } = window.location;
   const element = hash ? doc.getElementById(hash.substring(1)) : false;
   if (hash && element) element.scrollIntoView();
+
+  loadHeader(doc.querySelector('header'));
+  loadFooter(doc.querySelector('footer'));
 
   loadCSS(`${window.hlx.codeBasePath}/styles/lazy-styles.css`);
   loadFonts();
