@@ -3,7 +3,7 @@
   "plugins": [
     {
       "id": "asset-library",
-      "title": "AEM Assets Library",
+      "title": "Sherest Library",
       "environments": ["edit"],
       "url": "https://experience.adobe.com/solutions/CQ-assets-selectors/static-assets/resources/franklin/asset-selector.html",
       "isPalette": true,
